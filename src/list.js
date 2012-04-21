@@ -1,4 +1,21 @@
 /*
+
+Heavily Modified by Diego 4/21/2012
+Changes:
+
+1) Removed lots and lots of bloat. Recoded many parts with jquery if possible.
+
+2) Add a 'l-hilite' css class to the item attribute if its selected for sort. Just
+change the css for a great highlighting while sorting feature.
+
+3) Fixed bug where if item attribute does not exist, the entire sort fails. It now
+auto defaults to ' ' single space if an attribute is missing.
+
+4) This is only tested with existing list parsing. Adding/Removing/Editing is not testd.
+
+5) Compatible with latest Chrome/IE/Firefox.
+
+
 ListJS Beta 0.2.0
 By Jonny Strömberg (www.jonnystromberg.com, www.listjs.com)
 
@@ -29,738 +46,537 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 */
 (function( window, undefined ) {
-"use strict";
-var document = window.document,
-	h;
+    "use strict";
+    var document = window.document,
+        h;
 
-var List = function(id, options, values) {
-    var self = this,
-		templater,
-		init,
-		initialItems,
-		Item,
-		Templater,
-		sortButtons,
-		events = {
-		    'updated': []
-		};
-    this.listContainer = (typeof(id) == 'string') ? document.getElementById(id) : id;
-    // Check if the container exists. If not return instead of breaking the javascript
-    if (!this.listContainer)
-        return;
-    
-    this.items = [];
-    this.visibleItems = []; // These are the items currently visible
-    this.matchingItems = []; // These are the items currently matching filters and search, regadlessof visible count
-    this.searched = false;
-    this.filtered = false;
-
-    this.list = null;
-    this.templateEngines = {};
-    
-    this.page = options.page || 200;
-    this.i = options.i || 1;
-
-    init = {
-        start: function(values, options) {
-            options.plugins = options.plugins || {};
-            this.classes(options);
-            templater = new Templater(self, options);
-            this.callbacks(options);
-            this.items.start(values, options);
-            self.update();
-            this.plugins(options.plugins);
-        },
-        classes: function(options) {
-            options.listClass = options.listClass || 'list';
-            options.searchClass = options.searchClass || 'search';
-            options.sortClass = options.sortClass || 'sort';
-        },
-        callbacks: function(options) {
-            self.list = h.getByClass(options.listClass, self.listContainer, true);
-            h.addEvent(h.getByClass(options.searchClass, self.listContainer), 'keyup', self.search);
-            sortButtons = h.getByClass(options.sortClass, self.listContainer);
-            h.addEvent(sortButtons, 'click', self.sort);
-        },
-        items: {
-            start: function(values, options) {
-                if (options.valueNames) {
-                    var itemsToIndex = this.get(),
-                    valueNames = options.valueNames;
-                    if (options.indexAsync) {
-                        this.indexAsync(itemsToIndex, valueNames);
-                    } else {
-                        this.index(itemsToIndex, valueNames);
-                    }
-                }
-                if (values !== undefined) {
-                    self.add(values);
-                }
-            },
-            get: function() {
-                // return h.getByClass('item', self.list);
-                var nodes = self.list.childNodes,
-                items = [];
-                for (var i = 0, il = nodes.length; i < il; i++) {
-                    // Only textnodes have a data attribute
-                    if (nodes[i].data === undefined) {
-                        items.push(nodes[i]);
-                    }
-                }
-                return items;
-            },
-            index: function(itemElements, valueNames) {
-                for (var i = 0, il = itemElements.length; i < il; i++) {
-                    self.items.push(new Item(valueNames, itemElements[i]));
-                }
-            },
-            indexAsync: function(itemElements, valueNames) {
-                var itemsToIndex = itemElements.splice(0, 100); // TODO: If < 100 items, what happens in IE etc?
-                this.index(itemsToIndex, valueNames);
-                if (itemElements.length > 0) {
-                    setTimeout(function() {
-                        init.items.indexAsync(itemElements, valueNames);
-                        },
-                    10);
-                } else {
-                    self.update();
-                    // TODO: Add indexed callback
-                }
-            }
-        },
-        plugins: function(plugins) {
-            for (var i = 0; i < plugins.length; i++) {
-                var pluginName = plugins[i][1].name || plugins[i][0];
-                self[pluginName] = new self.plugins[plugins[i][0]](self, plugins[i][1]);
-            }
-        }
-    };
-
-
-    /*
-    * Add object to list
-    */
-    this.add = function(values, callback) {
-        if (callback) {
-            addAsync(values, callback);
-        }
-        var added = [],
-            notCreate = false;
-        if (values[0] === undefined){
-            values = [values];
-        }
-        for (var i = 0, il = values.length; i < il; i++) {
-            var item = null;
-            if (values[i] instanceof Item) {
-                item = values[i];
-                item.reload();
-            } else {
-                notCreate = (self.items.length > self.page) ? true : false;
-                item = new Item(values[i], undefined, notCreate);
-            }
-            self.items.push(item);
-            added.push(item);
-        }
-        self.update();
-        return added;
-    };
-
-    /*
-    * Adds items asynchronous to the list, good for adding huge amount of
-    * data. Defaults to add 100 items a time
-    */
-    var addAsync = function(values, callback, items) {
-        var valuesToAdd = values.splice(0, 100);
-        items = items || [];
-        items = items.concat(self.add(valuesToAdd));
-        if (values.length > 0) {
-            setTimeout(function() {
-                addAsync(values, callback, items);
-            }, 10);
-        } else {
-            self.update();
-            callback(items);
-        }
-    };
-
-	this.show = function(i, page) {
-		this.i = i;
-		this.page = page;
-		self.update();
-	};
-
-    /* Removes object from list.
-    * Loops through the list and removes objects where
-    * property "valuename" === value
-    */
-    this.remove = function(valueName, value, options) {
-        var found = 0;
-        for (var i = 0, il = self.items.length; i < il; i++) {
-            if (self.items[i].values()[valueName] == value) {
-                templater.remove(self.items[i], options);
-                self.items.splice(i,1);
-                il--;
-                found++;
-            }
-        }
-        self.update();
-        return found;
-    };
-
-    /* Gets the objects in the list which
-    * property "valueName" === value
-    */
-    this.get = function(valueName, value) {
-        var matchedItems = [];
-        for (var i = 0, il = self.items.length; i < il; i++) {
-            var item = self.items[i];
-            if (item.values()[valueName] == value) {
-                matchedItems.push(item);
-            }
-        }
-        if (matchedItems.length == 0) {
-            return null;
-        } else if (matchedItems.length == 1) {
-            return matchedItems[0];
-        } else {
-            return matchedItems;
-        }
-    };
-
-    /* Sorts the list.
-    * @valueOrEvent Either a JavaScript event object or a valueName
-    * @sortFunction (optional) Define if natural sorting does not fullfill your needs
-    */
-    this.sort = function(valueName, options) {
-        var length = self.items.length,
-            value = null,
-            target = valueName.target || valueName.srcElement, /* IE have srcElement */
-            sorting = '',
-            isAsc = false,
-            asc = 'asc',
-            desc = 'desc',
-            options = options || {};
-
-        if (target === undefined) {
-            value = valueName;
-            isAsc = options.asc || false;
-        } else {
-            value = h.getAttribute(target, 'data-sort');
-            isAsc = h.hasClass(target, asc) ? false : true;
-        }
-        for (var i = 0, il = sortButtons.length; i < il; i++) {
-            h.removeClass(sortButtons[i], asc);
-            h.removeClass(sortButtons[i], desc);
-        }
-        if (isAsc) {
-            if (target !== undefined) {
-                h.addClass(target, asc);
-            }
-            isAsc = true;
-        } else {
-            if (target !== undefined) {
-                h.addClass(target, desc);
-            }
-            isAsc = false;
-        }
-
-        if (options.sortFunction) {
-            options.sortFunction = options.sortFunction;
-        } else {
-            options.sortFunction = function(a, b) {
-                return h.sorter.alphanum(a.values()[value], b.values()[value], isAsc);
+    var List = function(id, options, values) {
+        var self = this,
+            templater,
+            init,
+            initialItems,
+            Item,
+            Templater,
+            sortButtons,
+            events = {
+                'updated': []
             };
-        }
-        self.items.sort(options.sortFunction);
-        self.update();
-    };
-
-    /*
-    * Searches the list after values with content "searchStringOrEvent".
-    * The columns parameter defines if all values should be included in the search,
-    * defaults to undefined which means "all".
-    */
-    this.search = function(searchString, columns) {
-        self.i = 1; // Reset paging
-        var matching = [],
-            found,
-            item,
-            text,
-            values,
-            is,
-            columns = (columns === undefined) ? self.items[0].values() : columns,
-            searchString = (searchString === undefined) ? "" : searchString,
-            target = searchString.target || searchString.srcElement; /* IE have srcElement */
-
-        searchString = (target === undefined) ? (""+searchString).toLowerCase() : ""+target.value.toLowerCase();
-        is = self.items;
-        // Escape regular expression characters
-        searchString = searchString.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
-
-        templater.clear();
-        if (searchString === "" ) {
-            reset.search();
-            self.searched = false;
-            self.update();
-        } else {
-            self.searched = true;
-
-            for (var k = 0, kl = is.length; k < kl; k++) {
-                found = false;
-                item = is[k];
-                values = item.values();
-
-                for(var j in columns) {
-                    if(values.hasOwnProperty(j) && columns[j] !== null) {
-                        text = (values[j] != null) ? values[j].toString().toLowerCase() : "";
-                        if ((searchString !== "") && (text.search(searchString) > -1)) {
-                            found = true;
-                        }
-                    }
-                }
-                if (found) {
-                    item.found = true;
-                    matching.push(item);
-                } else {
-                    item.found = false;
-                }
-            }
-            self.update();
-        }
-        return self.visibleItems;
-    };
-
-    /*
-    * Filters the list. If filterFunction() returns False hides the Item.
-    * if filterFunction == false are the filter removed
-    */
-    this.filter = function(filterFunction) {
-        self.i = 1; // Reset paging
-        var matching = undefined;
-        reset.filter();
-        if (filterFunction === undefined) {
-            self.filtered = false;
-        } else {
-            matching = [];
-            self.filtered = true;
-            var is = self.items;
-            for (var i = 0, il = is.length; i < il; i++) {
-                var item = is[i];
-                if (filterFunction(item.values())) {
-                    item.filtered = true;
-                    matching.push(item);
-                } else {
-                    item.filtered = false;
-                }
-            }
-        }
-        self.update();
-        return self.visibleItems;
-    };
-
-    /*
-    * Get size of the list
-    */
-    this.size = function() {
-        return self.items.length;
-    };
-
-    /*
-    * Removes all items from the list
-    */
-    this.clear = function() {
-        templater.clear();
-        self.items = [];
-    };
-
-    this.on = function(event, callback) {
-        events[event].push(callback);
-    };
-
-    var trigger = function(event) {
-        var i = events[event].length;
-        while(i--) {
-            events[event][i]();
-        }
-    };
-
-    var reset = {
-        filter: function() {
-            var is = self.items,
-                il = is.length;
-            while (il--) {
-                is[il].filtered = false;
-            }
-        },
-        search: function() {
-            var is = self.items,
-                il = is.length;
-            while (il--) {
-                is[il].found = false;
-            }
-        }
-    };
-
-
-    this.update = function() {
-        var is = self.items,
-			il = is.length;
-
-        self.visibleItems = [];
-        self.matchingItems = [];
-        templater.clear();
-        for (var i = 0; i < il; i++) {
-            if (is[i].matching() && ((i+1) >= self.i && self.visibleItems.length < self.page)) {
-                is[i].show();
-                self.visibleItems.push(is[i]);
-                self.matchingItems.push(is[i]);
-			} else if (is[i].matching()) {
-                self.matchingItems.push(is[i]);
-                is[i].hide();
-			} else {
-                is[i].hide();
-			}
-        }
-        trigger('updated');
-    };
-
-    Item = function(initValues, element, notCreate) {
-        var item = this,
-            values = {};
-
-        this.found = false; // Show if list.searched == true and this.found == true
-        this.filtered = false;// Show if list.filtered == true and this.filtered == true
-
-        var init = function(initValues, element, notCreate) {
-            if (element === undefined) {
-                if (notCreate) {
-                    item.values(initValues, notCreate);
-                } else {
-                    item.values(initValues);
-                }
-            } else {
-                item.elm = element;
-                var values = templater.get(item, initValues);
-                item.values(values);
-            }
-        };
-        this.values = function(newValues, notCreate) {
-            if (newValues !== undefined) {
-                for(var name in newValues) {
-                    values[name] = newValues[name];
-                }
-                if (notCreate !== true) {
-                    templater.set(item, item.values());
-                }
-            } else {
-                return values;
-            }
-        };
-        this.show = function() {
-            templater.show(item);
-        };
-        this.hide = function() {
-            templater.hide(item);
-        };
-        this.matching = function() {
-            return (
-                (self.filtered && self.searched && item.found && item.filtered) ||
-               	(self.filtered && !self.searched && item.filtered) ||
-                (!self.filtered && self.searched && item.found) ||
-                (!self.filtered && !self.searched)
-            );
-        };
-        this.visible = function() {
-            return (item.elm.parentNode) ? true : false;
-        };
-        init(initValues, element, notCreate);
-    };
-
-    /* Templater with different kinds of template engines.
-    * All engines have these methods
-    * - reload(item)
-    * - remove(item)
-    */
-    Templater = function(list, settings) {
-        if (settings.engine === undefined) {
-            settings.engine = "standard";
-        } else {
-            settings.engine = settings.engine.toLowerCase();
-        }
-        return new self.constructor.prototype.templateEngines[settings.engine](list, settings);
-    };
-
-    init.start(values, options);
-};
-
-List.prototype.templateEngines = {};
-List.prototype.plugins = {};
-
-List.prototype.templateEngines.standard = function(list, settings) {
-    var listSource = h.getByClass(settings.listClass, list.listContainer, true),
-        itemSource = getItemSource(settings.item),
-        templater = this;
-
-    function getItemSource(item) {
-        if (item === undefined) {
-            var nodes = listSource.childNodes,
-                items = [];
-
-            for (var i = 0, il = nodes.length; i < il; i++) {
-                // Only textnodes have a data attribute
-                if (nodes[i].data === undefined) {
-                    return nodes[i];
-                }
-            }
-            return null;
-        } else if (item.indexOf("<") !== -1) { // Try create html element of list, do not work for tables!!
-            var div = document.createElement('div');
-            div.innerHTML = item;
-            return div.firstChild;
-        } else {
-            return document.getElementById(settings.item);
-        }
-    }
-
-    var ensure = {
-        created: function(item) {
-            if (item.elm === undefined) {
-                templater.create(item);
-            }
-        }
-    };
-
-    /* Get values from element */
-    this.get = function(item, valueNames) {
-        ensure.created(item);
-        var values = {};
-        for(var i = 0, il = valueNames.length; i < il; i++) {
-            values[valueNames[i]] = h.getByClass(valueNames[i], item.elm)[0].innerHTML;
-        }
-        return values;
-    };
-
-    /* Sets values at element */
-    this.set = function(item, values) {
-        ensure.created(item);
-        for(var v in values) {
-            if (values.hasOwnProperty(v)) {
-                // TODO speed up if possible
-                var elm = h.getByClass(v, item.elm, true);
-                if (elm) {
-                    elm.innerHTML = values[v];
-                }
-            }
-        }
-    };
-
-    this.create = function(item) {
-        if (item.elm !== undefined) {
+        this.listContainer = (typeof(id) == 'string') ? $('#'+id) : id;
+        // Check if the container exists. If not return instead of breaking the javascript
+        if (!this.listContainer)
             return;
-        }
-        /* If item source does not exists, use the first item in list as
-        source for new items */
-        var newItem = itemSource.cloneNode(true);
-        newItem.id = "";
-        item.elm = newItem;
-        templater.set(item, item.values());
-    };
-    this.remove = function(item) {
-        listSource.removeChild(item.elm);
-    };
-    this.show = function(item) {
-        ensure.created(item);
-        listSource.appendChild(item.elm);
-    };
-    this.hide = function(item) {
-        if (item.elm !== undefined && item.elm.parentNode === listSource) {
-            listSource.removeChild(item.elm);
-        }
-    };
-    this.clear = function() {
-        /* .innerHTML = ''; fucks up IE */
-        if (listSource.hasChildNodes()) {
-            while (listSource.childNodes.length >= 1)
-            {
-                listSource.removeChild(listSource.firstChild);
-            }
-        }
-    };
-};
 
+        this.items = [];
+        this.visibleItems = []; // These are the items currently visible
+        this.matchingItems = []; // These are the items currently matching filters and search, regadlessof visible count
+        this.searched = false;
+        this.filtered = false;
 
-/*
-* These helper functions are not written by List.js author Jonny (they may have been
-* adjusted, thought).
-*/
-h = {
-    /*
-    * Cross browser getElementsByClassName, which uses native
-    * if it exists. Modified version of Dustin Diaz function:
-    * http://www.dustindiaz.com/getelementsbyclass
-    */
-    getByClass: (function() {
-        if (document.getElementsByClassName) {
-            return function(searchClass,node,single) {
-                if (single) {
-                    return node.getElementsByClassName(searchClass)[0];
-                } else {
-                    return node.getElementsByClassName(searchClass);
-                }
-            };
-        } else {
-            return function(searchClass,node,single) {
-                var classElements = [],
-                    tag = '*';
-                if (node == null) {
-                    node = document;
-                }
-                var els = node.getElementsByTagName(tag);
-                var elsLen = els.length;
-                var pattern = new RegExp("(^|\\s)"+searchClass+"(\\s|$)");
-                for (var i = 0, j = 0; i < elsLen; i++) {
-                    if ( pattern.test(els[i].className) ) {
-                        if (single) {
-                            return els[i];
+        this.list = null;
+        this.templateEngines = {};
+
+        this.page = options.page || 200;
+        this.i = options.i || 1;
+
+        init = {
+            start: function(values, options) {
+                options.plugins = options.plugins || {};
+                this.classes(options);
+                templater = new Templater(self, options);
+                this.callbacks(options);
+                this.items.start(values, options);
+                //self.update();
+                this.plugins(options.plugins);
+            },
+            classes: function(options) {
+                options.listClass = options.listClass || 'sort-list';
+                options.searchClass = options.searchClass || 'sort-search';
+                options.sortClass = options.sortClass || 'sort-sort';
+            },
+            callbacks: function(options) {
+                self.list =  $(self.listContainer).find('.'+options.listClass);
+                $(self.listContainer).find('.'+options.searchClass).on('keyup', self.search);
+                sortButtons = $(self.listContainer).find('.'+options.sortClass)
+                $(sortButtons).on('click',self.sort);
+            },
+            items: {
+                start: function(values, options) {
+                    if (options.valueNames) {
+                        var itemsToIndex = this.get(),
+                            valueNames = options.valueNames;
+                        if (options.indexAsync) {
+                            this.indexAsync(itemsToIndex, valueNames);
                         } else {
-                            classElements[j] = els[i];
-                            j++;
+                            this.index(itemsToIndex, valueNames);
                         }
                     }
-                }
-                return classElements;
-            };
-        }
-    })(),
-    /* (elm, 'event' callback) Source: http://net.tutsplus.com/tutorials/javascript-ajax/javascript-from-null-cross-browser-event-binding/ */
-    addEvent: (function( window, document ) {
-        if ( document.addEventListener ) {
-            return function( elem, type, cb ) {
-                if ((elem && !(elem instanceof Array) && !elem.length && !h.isNodeList(elem) && (elem.length !== 0)) || elem === window ) {
-                    elem.addEventListener(type, cb, false );
-                } else if ( elem && elem[0] !== undefined ) {
-                    var len = elem.length;
-                    for ( var i = 0; i < len; i++ ) {
-                        h.addEvent(elem[i], type, cb);
+                    if (values !== undefined) {
+                        self.add(values);
                     }
-                }
-            };
-        }
-        else if ( document.attachEvent ) {
-            return function ( elem, type, cb ) {
-                if ((elem && !(elem instanceof Array) && !elem.length && !h.isNodeList(elem) && (elem.length !== 0)) || elem === window ) {
-                    elem.attachEvent( 'on' + type, function() { return cb.call(elem, window.event); } );
-                } else if ( elem && elem[0] !== undefined ) {
-                    var len = elem.length;
-                    for ( var i = 0; i < len; i++ ) {
-                        h.addEvent( elem[i], type, cb );
-                    }
-                }
-            };
-        }
-    })(this, document),
-    /* (elm, attribute) Source: http://stackoverflow.com/questions/3755227/cross-browser-javascript-getattribute-method */
-    getAttribute: function(ele, attr) {
-        var result = (ele.getAttribute && ele.getAttribute(attr)) || null;
-        if( !result ) {
-            var attrs = ele.attributes;
-            var length = attrs.length;
-            for(var i = 0; i < length; i++) {
-                if (attr[i] !== undefined) {
-                    if(attr[i].nodeName === attr) {
-                        result = attr[i].nodeValue;
-                    }
-                }
-            }
-        }
-        return result;
-    },
-    /* http://stackoverflow.com/questions/7238177/detect-htmlcollection-nodelist-in-javascript */
-    isNodeList: function(nodes) {
-        var result = Object.prototype.toString.call(nodes);
-        if (typeof nodes === 'object' && /^\[object (HTMLCollection|NodeList|Object)\]$/.test(result) && (nodes.length == 0 || (typeof node === "object" && nodes[0].nodeType > 0))) {
-            return true;
-        }
-        return false;
-    },
-    hasClass: function(ele, classN) {
-        var classes = this.getAttribute(ele, 'class') || this.getAttribute(ele, 'className');
-        return (classes.search(classN) > -1);
-    },
-    addClass: function(ele, classN) {
-        if (!this.hasClass(ele, classN)) {
-            var classes = this.getAttribute(ele, 'class') || this.getAttribute(ele, 'className');
-            classes = classes + ' ' + classN + ' ';
-            classes = classes.replace(/\s{2,}/g, ' ');
-            ele.setAttribute('class', classes);
-        }
-    },
-    removeClass: function(ele, classN) {
-        if (this.hasClass(ele, classN)) {
-            var classes = this.getAttribute(ele, 'class') || this.getAttribute(ele, 'className');
-            classes = classes.replace(classN, '');
-            ele.setAttribute('class', classes);
-        }
-    },
-    /*
-    * The sort function. From http://my.opera.com/GreyWyvern/blog/show.dml/1671288
-    */
-    sorter: {
-        alphanum: function(a,b,asc) {
-            if (a === undefined || a === null) {
-                a = "";
-            }
-            if (b === undefined || b === null) {
-                b = "";
-            }
-            a = a.toString().replace(/&(lt|gt);/g, function (strMatch, p1){
-                return (p1 == "lt")? "<" : ">";
-            });
-            a = a.replace(/<\/?[^>]+(>|$)/g, "");
-
-            b = b.toString().replace(/&(lt|gt);/g, function (strMatch, p1){
-                return (p1 == "lt")? "<" : ">";
-            });
-            b = b.replace(/<\/?[^>]+(>|$)/g, "");
-            var aa = this.chunkify(a);
-            var bb = this.chunkify(b);
-
-            for (var x = 0; aa[x] && bb[x]; x++) {
-                if (aa[x] !== bb[x]) {
-                    var c = Number(aa[x]), d = Number(bb[x]);
-                    if (asc) {
-                        if (c == aa[x] && d == bb[x]) {
-                            return c - d;
-                        } else {
-                            return (aa[x] > bb[x]) ? 1 : -1;
+                },
+                get: function() {
+                    var nodes = self.list.children(),
+                        items = [];
+                    for (var i = 0, il = nodes.length; i < il; i++) {
+                        // Only textnodes have a data attribute
+                        if (nodes[i].data === undefined) {
+                            items.push(nodes[i]);
                         }
+                    }
+                    return items;
+                },
+                index: function(itemElements, valueNames) {
+                    for (var i = 0, il = itemElements.length; i < il; i++) {
+                        self.items.push(new Item(valueNames, itemElements[i]));
+                    }
+                },
+                indexAsync: function(itemElements, valueNames) {
+                    var itemsToIndex = itemElements.splice(0, 100); // TODO: If < 100 items, what happens in IE etc?
+                    this.index(itemsToIndex, valueNames);
+                    if (itemElements.length > 0) {
+                        setTimeout(function() {
+                                init.items.indexAsync(itemElements, valueNames);
+                            },
+                            10);
                     } else {
-                        if (c == aa[x] && d == bb[x]) {
-                            return d-c;//c - d;
-                        } else {
-                            return (aa[x] > bb[x]) ? -1 : 1; //(aa[x] > bb[x]) ? 1 : -1;
+                        self.update();
+                        // TODO: Add indexed callback
+                    }
+                }
+            },
+            plugins: function(plugins) {
+                for (var i = 0; i < plugins.length; i++) {
+                    var pluginName = plugins[i][1].name || plugins[i][0];
+                    self[pluginName] = new self.plugins[plugins[i][0]](self, plugins[i][1]);
+                }
+            }
+        };
+
+
+
+
+        this.show = function(i, page) {
+            this.i = i;
+            this.page = page;
+            self.update();
+        };
+
+
+
+        /* Gets the objects in the list which
+         * property "valueName" === value
+         */
+        this.get = function(valueName, value) {
+            var matchedItems = [];
+            for (var i = 0, il = self.items.length; i < il; i++) {
+                var item = self.items[i];
+                if (item.values()[valueName] == value) {
+                    matchedItems.push(item);
+                }
+            }
+            if (matchedItems.length == 0) {
+                return null;
+            } else if (matchedItems.length == 1) {
+                return matchedItems[0];
+            } else {
+                return matchedItems;
+            }
+        };
+
+        /* Sorts the list.
+         * @valueOrEvent Either a JavaScript event object or a valueName
+         * @sortFunction (optional) Define if natural sorting does not fullfill your needs
+         */
+        this.sort = function(valueName, options) {
+            var length = self.items.length,
+                value = null,
+                target = valueName.target,
+                sorting = '',
+                isAsc = false,
+                asc = 'l-asc',
+                desc = 'l-desc',
+                options = options || {};
+
+            value = $(target).attr('data-sort');
+            isAsc = $(target).hasClass(asc) ? false : true;
+
+
+            //xing higlight the items been sorted
+            $(".l-hilite").removeClass("l-hilite");
+            $("."+value).addClass("l-hilite");
+
+            for (var i = 0, il = sortButtons.length; i < il; i++) {
+                $(sortButtons[i]).removeClass(asc);
+                $(sortButtons[i]).removeClass(desc);
+
+            }
+            if (isAsc) {
+                if (target !== undefined) {
+                    $(target).addClass(asc);
+                }
+                isAsc = true;
+            } else {
+                if (target !== undefined) {
+                    $(target).addClass(desc);
+                }
+                isAsc = false;
+            }
+
+            if (options.sortFunction) {
+                options.sortFunction = options.sortFunction;
+            } else {
+                options.sortFunction = function(a, b) {
+                    return h.sorter.alphanum(a.values()[value], b.values()[value], isAsc);
+                };
+            }
+
+            self.items.sort(options.sortFunction);
+
+            self.update();
+
+        };
+
+        /*
+         * Searches the list after values with content "searchStringOrEvent".
+         * The columns parameter defines if all values should be included in the search,
+         * defaults to undefined which means "all".
+         */
+        this.search = function(searchString, columns) {
+            self.i = 1; // Reset paging
+            var matching = [],
+                found,
+                item,
+                text,
+                values,
+                is,
+                columns = (columns === undefined) ? self.items[0].values() : columns,
+                searchString = (searchString === undefined) ? "" : searchString,
+                target = searchString.target || searchString.srcElement; /* IE have srcElement */
+
+            searchString = (target === undefined) ? (""+searchString).toLowerCase() : ""+target.value.toLowerCase();
+            is = self.items;
+            // Escape regular expression characters
+            searchString = searchString.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
+
+            templater.clear();
+            if (searchString === "" ) {
+                reset.search();
+                self.searched = false;
+                self.update();
+            } else {
+                self.searched = true;
+
+                for (var k = 0, kl = is.length; k < kl; k++) {
+                    found = false;
+                    item = is[k];
+                    values = item.values();
+
+                    for(var j in columns) {
+                        if(values.hasOwnProperty(j) && columns[j] !== null) {
+                            text = (values[j] != null) ? values[j].toString().toLowerCase() : "";
+                            if ((searchString !== "") && (text.search(searchString) > -1)) {
+                                found = true;
+                            }
                         }
+                    }
+                    if (found) {
+                        item.found = true;
+                        matching.push(item);
+                    } else {
+                        item.found = false;
+                    }
+                }
+                self.update();
+            }
+            return self.visibleItems;
+        };
+
+        /*
+         * Filters the list. If filterFunction() returns False hides the Item.
+         * if filterFunction == false are the filter removed
+         */
+        this.filter = function(filterFunction) {
+            self.i = 1; // Reset paging
+            var matching = undefined;
+            reset.filter();
+            if (filterFunction === undefined) {
+                self.filtered = false;
+            } else {
+                matching = [];
+                self.filtered = true;
+                var is = self.items;
+                for (var i = 0, il = is.length; i < il; i++) {
+                    var item = is[i];
+                    if (filterFunction(item.values())) {
+                        item.filtered = true;
+                        matching.push(item);
+                    } else {
+                        item.filtered = false;
                     }
                 }
             }
-            return aa.length - bb.length;
-        },
-        chunkify: function(t) {
-            var tz = [], x = 0, y = -1, n = 0, i, j;
+            self.update();
+            return self.visibleItems;
+        };
 
-            while (i = (j = t.charAt(x++)).charCodeAt(0)) {
-                var m = (i == 45 || i == 46 || (i >=48 && i <= 57));
-                if (m !== n) {
-                    tz[++y] = "";
-                    n = m;
-                }
-                tz[y] += j;
+        /*
+         * Get size of the list
+         */
+        this.size = function() {
+            return self.items.length;
+        };
+
+        /*
+         * Removes all items from the list
+         */
+        this.clear = function() {
+            templater.clear();
+            self.items = [];
+        };
+
+        this.on = function(event, callback) {
+            events[event].push(callback);
+        };
+
+        var trigger = function(event) {
+            var i = events[event].length;
+            while(i--) {
+                events[event][i]();
             }
-            return tz;
-        }
-    }
-};
+        };
 
-window.List = List;
-window.ListJsHelpers = h;
+        var reset = {
+            filter: function() {
+                var is = self.items,
+                    il = is.length;
+                while (il--) {
+                    is[il].filtered = false;
+                }
+            },
+            search: function() {
+                var is = self.items,
+                    il = is.length;
+                while (il--) {
+                    is[il].found = false;
+                }
+            }
+        };
+
+
+        this.update = function() {
+            var is = self.items,
+                il = is.length;
+
+            self.visibleItems = [];
+            self.matchingItems = [];
+            templater.clear();
+            for (var i = 0; i < il; i++) {
+                if (is[i].matching() && ((i+1) >= self.i && self.visibleItems.length < self.page)) {
+                    is[i].show();
+                    self.visibleItems.push(is[i]);
+                    self.matchingItems.push(is[i]);
+                } else if (is[i].matching()) {
+                    self.matchingItems.push(is[i]);
+                    is[i].hide();
+                } else {
+                    is[i].hide();
+                }
+            }
+            trigger('updated');
+        };
+
+        Item = function(initValues, element, notCreate) {
+            var item = this,
+                values = {};
+
+            this.found = false; // Show if list.searched == true and this.found == true
+            this.filtered = false;// Show if list.filtered == true and this.filtered == true
+
+            var init = function(initValues, element, notCreate) {
+                if (element === undefined) {
+                    if (notCreate) {
+                        item.values(initValues, notCreate);
+                    } else {
+                        item.values(initValues);
+                    }
+                } else {
+                    item.elm = element;
+                    var values = templater.get(item, initValues);
+                    item.values(values);
+                }
+            };
+            this.values = function(newValues, notCreate) {
+                if (newValues !== undefined) {
+                    for(var name in newValues) {
+                        values[name] = newValues[name];
+                    }
+
+                } else {
+                    return values;
+                }
+            };
+            this.show = function() {
+                templater.show(item);
+            };
+            this.hide = function() {
+                templater.hide(item);
+            };
+            this.matching = function() {
+                return (
+                    (self.filtered && self.searched && item.found && item.filtered) ||
+                        (self.filtered && !self.searched && item.filtered) ||
+                        (!self.filtered && self.searched && item.found) ||
+                        (!self.filtered && !self.searched)
+                    );
+            };
+            this.visible = function() {
+                return (item.elm.parentNode) ? true : false;
+            };
+            init(initValues, element, notCreate);
+        };
+
+        /* Templater with different kinds of template engines.
+         * All engines have these methods
+         * - reload(item)
+         * - remove(item)
+         */
+        Templater = function(list, settings) {
+            if (settings.engine === undefined) {
+                settings.engine = "standard";
+            } else {
+                settings.engine = settings.engine.toLowerCase();
+            }
+            return new self.constructor.prototype.templateEngines[settings.engine](list, settings);
+        };
+
+        init.start(values, options);
+    };
+
+    List.prototype.templateEngines = {};
+    List.prototype.plugins = {};
+
+    List.prototype.templateEngines.standard = function(list, settings) {
+        var listSource = $(list.listContainer).find('.'+settings.listClass), //h.getByClass(settings.listClass, list.listContainer, true),
+            itemSource = $('#'+settings.item), //getItemSource(settings.item),
+            templater = this;
+
+        /* Get values from element */
+        this.get = function(item, valueNames) {
+
+            var values = {};
+            var t = '';
+            for(var i = 0, il = valueNames.length; i < il; i++) {
+                t = $(item.elm).find('.'+valueNames[i]).html();
+
+                if(!t) {
+                    t = ' ';
+                }
+                values[valueNames[i]] = t;
+            }
+            return values;
+        };
+
+        /* Sets values at element */
+        this.set = function(item, values) {
+
+            for(var v in values) {
+                // TODO speed up if possible
+                var elm = $(item.elm).find('.'+v);
+                if (elm) {
+                    $(elm).html(values[v]);
+                }
+
+            }
+        };
+
+        this.show = function(item) {
+            listSource.append(item.elm);
+        };
+        this.hide = function(item) {
+            if (item.elm !== undefined && $(item.elm).parent() === listSource) {
+                listSource.remove(item.elm);
+            }
+        };
+        this.clear = function() {
+            listSource.empty();
+        };
+    };
+
+    h = {
+
+        sorter: {
+
+            alphanum: function (a, b, asc) {
+
+                if (a === undefined || a === null || a == ' ') {
+                    a = '0';
+                }
+                if (b === undefined || b === null || b == ' ') {
+                    b = '0';
+                }
+
+
+                var re = /(^-?[0-9]+(\.?[0-9]*)[df]?e?[0-9]?$|^0x[0-9a-f]+$|[0-9]+)/gi,
+                    sre = /(^[ ]*|[ ]*$)/g,
+                    dre = /(^([\w ]+,?[\w ]+)?[\w ]+,?[\w ]+\d+:\d+(:\d+)?[\w ]?|^\d{1,4}[\/\-]\d{1,4}[\/\-]\d{1,4}|^\w+, \w+ \d+, \d{4})/,
+                    dre2 = /^\d+[\-\/]{1,1}\d+[\-\/]{1,1}\d+/,
+                    hre = /^0x[0-9a-f]+$/i,
+                    ore = /^0/,
+                // convert all to strings and trim()
+                    x = a.toString().replace(sre, '') || '',
+                    y = b.toString().replace(sre, '') || '',
+
+                    xD = Date.parse(x.match(dre2)),
+                    yD = Date.parse(y.match(dre2));
+
+
+                //dates
+                if (xD && yD) {
+                    if ( xD < yD ) return asc ? -1 : 1;
+                    else if ( xD > yD )	return asc ? 1 : -1;
+                    return 0;
+                }
+
+                // numeric, hex or date detection
+                var
+                    xH = parseInt(x.match(hre)),
+                    yH = parseInt(y.match(hre));
+
+
+                // first try and sort Hex codes
+                if (xH && yH) {
+                    if ( xH < yH ) return asc ? -1 : 1;
+                    else if ( xH > yH )	return asc ? 1 : -1;
+                    return 0;
+                }
+
+                // chunk/tokenize
+                var
+                    xN = x.replace(re, '\0$1\0').replace(/\0$/,'').replace(/^\0/,'').split('\0'),
+                    yN = y.replace(re, '\0$1\0').replace(/\0$/,'').replace(/^\0/,'').split('\0');
+
+
+                // natural sorting through split numeric strings and default strings
+                for(var cLoc= 0, oFxNcL, oFyNcL, numS=Math.max(xN.length, yN.length); cLoc < numS; cLoc++) {
+                    // find floats not starting with '0', string or 0 if not defined (Clint Priest)
+                    oFxNcL = !(xN[cLoc] || '').match(ore) && parseFloat(xN[cLoc]) || xN[cLoc] || 0;
+                    oFyNcL = !(yN[cLoc] || '').match(ore) && parseFloat(yN[cLoc]) || yN[cLoc] || 0;
+                    // handle numeric vs string comparison - number < string - (Kyle Adams)
+                    if (isNaN(oFxNcL) !== isNaN(oFyNcL)) return (isNaN(oFxNcL)) ? (asc ? 1 : -1) : (asc ? -1 : 1);
+                    // rely on string comparison if different types - i.e. '02' < 2 != '02' < '2'
+                    else if (typeof oFxNcL !== typeof oFyNcL) {
+                        oFxNcL += '';
+                        oFyNcL += '';
+                    }
+                    if (oFxNcL < oFyNcL) return asc ? -1 : 1;
+                    if (oFxNcL > oFyNcL) return asc ? 1 : -1;
+                }
+                return 0;
+            }
+
+        }
+    };
+
+    window.List = List;
+    window.ListJsHelpers = h;
 })(window);
